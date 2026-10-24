@@ -1,0 +1,162 @@
+name: QA E2E & Screenshot Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target QA job (all / windows / android-ui)"
+        required: false
+        default: "all"
+
+permissions:
+  contents: read
+
+jobs:
+  qa-windows:
+    if: ${{ github.event.inputs.target == '' || github.event.inputs.target == 'all' || github.event.inputs.target == 'windows' }}
+    name: QA E2E Windows Server 2022 + Real Screenshots
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      RDP_USER: xyadmin
+      RDP_PASSWORD: XyQaPassword123!
+      SAMP: ya
+      WIN10: ya
+      XYDESK: ya
+      EKSTRA: ya
+      GRAFIS: software
+      ROBLOX: ya
+      MINECRAFT_JAVA: ya
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 1. Setup RDP & User
+        shell: pwsh
+        run: ./scripts/setup-rdp.ps1
+
+      - name: 2. Setup Grafis Mesa3D OpenGL 4.6
+        shell: pwsh
+        run: ./scripts/setup-grafis.ps1
+
+      - name: 3. Setup Runtime & GTA SA-MP 0.3.7-R5
+        shell: pwsh
+        run: ./scripts/setup-samp.ps1
+
+      - name: 4. Setup Suite Game & Studio (Minecraft, Roblox, ETS 2, Blender, MEmu, FiveM)
+        shell: pwsh
+        run: ./scripts/setup-games.ps1
+
+      - name: 5. Setup Extras & Wallpaper
+        shell: pwsh
+        run: ./scripts/setup-extras.ps1
+
+      - name: 6. Setup XyDeskDashboard.exe & Host Agent v2.5
+        shell: pwsh
+        run: |
+          ./scripts/setup-tools-hub.ps1
+          ./scripts/setup-xydesk.ps1
+
+      - name: 7. Run Real Window Launch & Screenshot Capture Suite
+        shell: powershell
+        run: ./scripts/run-qa-screenshots.ps1
+
+      - name: 8. Upload QA Screenshots Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xyrdp-qa-screenshots
+          path: C:\XyRDP\qa-screenshots\*
+          retention-days: 7
+
+  qa-android-ui:
+    if: ${{ github.event.inputs.target == '' || github.event.inputs.target == 'all' || github.event.inputs.target == 'android-ui' }}
+    name: QA Real Render Android APK UI (Jetpack Compose + Robolectric Native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout XyRDP
+        uses: actions/checkout@v4
+        with:
+          path: xyrdp
+
+      - name: Checkout XyDesk-Remote
+        uses: actions/checkout@v4
+        with:
+          repository: xykal/XyDesk-Remote
+          path: xydesk-remote
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK (platforms;android-37.2 & build-tools;37.0.0)
+        run: |
+          set -eux
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-37.2" "build-tools;37.0.0"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Apply Candidate SessionControls.kt & RdpOptions.kt + Real Render Test
+        run: |
+          set -eux
+          cp -f xyrdp/qa-android-ui/SessionControls.kt xydesk-remote/client/Android/Studio/app/src/main/kotlin/id/xydesk/remote/ui/SessionControls.kt
+          cp -f xyrdp/qa-android-ui/XyDiscordVoiceStage.kt xydesk-remote/client/Android/Studio/app/src/main/kotlin/id/xydesk/remote/ui/XyDiscordVoiceStage.kt
+          cp -f xyrdp/qa-android-ui/RdpOptions.kt xydesk-remote/client/Android/Studio/core-rdp/src/main/kotlin/id/xydesk/remote/core/RdpOptions.kt
+          cp -f xyrdp/qa-android-ui/RdpOptionsTest.kt xydesk-remote/client/Android/Studio/core-rdp/src/test/kotlin/id/xydesk/remote/core/RdpOptionsTest.kt
+          mkdir -p xydesk-remote/client/Android/Studio/app/src/test/kotlin/id/xydesk/remote/ui
+          cp -f xyrdp/qa-android-ui/SessionControlsRealRenderTest.kt xydesk-remote/client/Android/Studio/app/src/test/kotlin/id/xydesk/remote/ui/SessionControlsRealRenderTest.kt
+
+          cat >> xydesk-remote/client/Android/Studio/app/build.gradle << 'EOF'
+
+          android {
+              testOptions {
+                  unitTests {
+                      includeAndroidResources = true
+                      all {
+                          systemProperty 'robolectric.graphicsMode', 'NATIVE'
+                          systemProperty 'robolectric.pixelCopyRenderMode', 'hardware'
+                          systemProperty 'roborazzi.test.record', 'true'
+                          systemProperty 'xyrdp.qa.outdir', System.getProperty('xyrdp.qa.outdir', '/tmp/apk-ui-screenshots')
+                          systemProperty 'xyrdp.qa.bg', System.getProperty('xyrdp.qa.bg', '')
+                      }
+                  }
+              }
+          }
+
+          dependencies {
+              testImplementation 'org.robolectric:robolectric:4.14.1'
+              testImplementation 'androidx.compose.ui:ui-test-junit4-android'
+              debugImplementation 'androidx.compose.ui:ui-test-manifest'
+              testImplementation 'io.github.takahirom.roborazzi:roborazzi:1.77.0'
+              testImplementation 'io.github.takahirom.roborazzi:roborazzi-compose:1.77.0'
+          }
+          EOF
+
+      - name: Run Unit Tests & Real Compose UI Screenshot Render
+        working-directory: xydesk-remote/client/Android/Studio
+        run: |
+          mkdir -p /tmp/apk-ui-screenshots
+          ./gradlew --stacktrace --no-daemon \
+            -Dxyrdp.qa.outdir=/tmp/apk-ui-screenshots \
+            -Dxyrdp.qa.bg="$GITHUB_WORKSPACE/xyrdp/qa-android-ui/bg_rdp_desktop.png" \
+            :core-rdp:testDebugUnitTest \
+            :app:testDebugUnitTest --tests "id.xydesk.remote.ui.SessionControlsRealRenderTest"
+          ls -lh /tmp/apk-ui-screenshots/
+
+      - name: Upload Real Android APK UI Screenshots Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xyrdp-apk-ui-screenshots
+          path: /tmp/apk-ui-screenshots/*
+          retention-days: 7
